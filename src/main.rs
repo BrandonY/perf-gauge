@@ -18,6 +18,8 @@ mod http_bench_session;
 mod metrics;
 mod prometheus_reporter;
 mod rate_limiter;
+mod mini_client;
+mod mini_client_wrapper;
 
 use crate::configuration::BenchmarkConfig;
 use crate::metrics::{BenchRunMetrics, ExternalMetricsServiceReporter};
@@ -80,13 +82,17 @@ fn create_async_metrics_channel(
     // as at the moment of writing this code not all major metric client libraries
     // had `async` APIs.
     // We can replace it with `tokio::sync::mpsc` and `tokio::spawn` at any time
+    println!("Getting ready to send metrics");
     let (sender, receiver) = std::sync::mpsc::channel();
     let reporter_task = thread::spawn(move || {
         while let Ok(stats) = receiver.recv() {
+            println!("Going to try to report a metric");
             // broadcast to all metrics reporters
             for reporter in &metric_reporters {
                 if let Err(e) = reporter.report(&stats) {
                     error!("Error sending metrics: {}", e);
+                } else {
+                    println!("Success sending metrics");
                 }
             }
         }
