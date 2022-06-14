@@ -28,6 +28,7 @@ impl BenchmarkProtocolAdapter for GcsBenchAdapter {
         let call_result = client.read_object(bucket, String::from("test.txt"));
         let byte_count = call_result.bytes_received as usize;
 
+
         if call_result.success {
                 // let data = r.get().await.unwrap_or(vec![]);
                 // bytes_processed += 100; // data.len();

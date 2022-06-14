@@ -92,7 +92,7 @@ impl Iterator for BenchSession {
 
 impl BenchBatch {
     pub async fn run(self, mut metrics: BenchRunMetrics) -> Result<BenchRunMetrics, String> {
-        let (metrics_sender, mut metrics_receiver) = mpsc::channel(1_000);
+        let (metrics_sender, mut metrics_receiver) = mpsc::channel(50_000);
 
         // single consumer to aggregate metrics
         let metrics_aggregator = tokio::spawn(async move {
