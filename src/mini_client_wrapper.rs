@@ -1,18 +1,24 @@
 
-use crate::mini_client::CreateGCSClient;
 use crate::mini_client::CallResult;
 use crate::mini_client::GoogleStorageClient;
 use crate::mini_client::ReadObject;
+use crate::mini_client::ClientAPI;
 
 
 pub struct GCSClient {
   raw_client: *mut GoogleStorageClient,
 }
 
+pub enum GCSClientAPI {
+    GrpcDirectpath = crate::mini_client::ClientAPI_GRPC_DIRECTPATH as isize,
+    GrpcNoDirectpath = crate::mini_client::ClientAPI_GRPC_NO_DIRECTPATH as isize,
+    Json = crate::mini_client::ClientAPI_JSON as isize,
+}
+
 impl GCSClient {
-  pub fn new(project_id: String) -> Result<Self, String> {
+  pub fn new(api: GCSClientAPI, project_id: String) -> Result<Self, String> {
     let project = std::ffi::CString::new(project_id).unwrap();
-    let raw_client = unsafe { crate::mini_client::CreateGCSClient(project.as_ptr()) };
+    let raw_client = unsafe { crate::mini_client::CreateGCSClient(api as u32, project.as_ptr()) };
     Ok(GCSClient { raw_client })
   }
 

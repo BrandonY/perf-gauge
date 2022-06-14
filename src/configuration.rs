@@ -17,6 +17,7 @@ use std::process::exit;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::io;
+use crate::mini_client_wrapper::GCSClientAPI;
 
 #[derive(Clone, Debug)]
 pub enum BenchmarkMode {
@@ -76,6 +77,7 @@ impl BenchmarkConfig {
                 (@arg PROJECT: --project +takes_value "GCP project id")
                 (@arg BUCKET: --bucket +takes_value "GCS bucket")
                 (@arg OBJECT: --object -O ... "GCS bucket objects")
+                (@arg API: --api +takes_value "GCS API name")
             )
         ).get_matches();
 
@@ -202,6 +204,12 @@ impl BenchmarkConfig {
                         .expect("misconfiguration for OBJECT")
                         .map(|s| s.to_string())
                         .collect(),
+                )
+                .api(
+                    config
+                        .value_of("API")
+                        .map(|s| s.to_string())
+                        .expect("API name is required"),
                 )
                 .build()
                 .expect("GcsBenchAdapterBuilder failed");
