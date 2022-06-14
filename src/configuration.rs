@@ -17,7 +17,6 @@ use std::process::exit;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::io;
-use crate::mini_client_wrapper::GCSClientAPI;
 
 #[derive(Clone, Debug)]
 pub enum BenchmarkMode {
@@ -209,7 +208,7 @@ impl BenchmarkConfig {
                     config
                         .value_of("API")
                         .map(|s| s.to_string())
-                        .expect("API name is required"),
+                        .expect("API name is required: grpc_directpath, grpc_no_directpath, or json"),
                 )
                 .build()
                 .expect("GcsBenchAdapterBuilder failed");

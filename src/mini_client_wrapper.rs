@@ -1,8 +1,6 @@
 
 use crate::mini_client::CallResult;
 use crate::mini_client::GoogleStorageClient;
-use crate::mini_client::ReadObject;
-use crate::mini_client::ClientAPI;
 
 
 pub struct GCSClient {
