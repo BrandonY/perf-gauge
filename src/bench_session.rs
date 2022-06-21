@@ -2,6 +2,7 @@ use crate::bench_run::BenchRun;
 use crate::configuration::BenchmarkMode;
 use crate::metrics::{BenchRunMetrics, RequestStats};
 use crate::rate_limiter::RateLimiter;
+use core::fmt;
 /// Copyright 2020 Developers of the perf-gauge project.
 ///
 /// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
@@ -24,9 +25,9 @@ pub struct BenchSession {
     mode: Arc<BenchmarkMode>,
     #[builder(setter(skip))]
     current_iteration: usize,
+    request_timeout: Option<Duration>,
 }
 
-#[derive(Debug)]
 pub struct BenchBatch {
     runs: Vec<BenchRun>,
     mode: Arc<BenchmarkMode>,
@@ -64,16 +65,18 @@ impl Iterator for BenchSession {
         for i in 0..self.concurrency {
             let idx = i + self.current_iteration * self.concurrency;
             items.push(if let Some(requests) = self.rate_ladder.step_requests {
-                BenchRun::with_request_limit(
+                BenchRun::from_request_limit(
                     idx,
                     requests,
                     RateLimiter::build_rate_limiter(rate_per_second),
+                    self.request_timeout,
                 )
             } else if let Some(duration) = self.rate_ladder.step_duration {
-                BenchRun::with_duration_limit(
+                BenchRun::from_duration_limit(
                     idx,
                     duration,
                     RateLimiter::build_rate_limiter(rate_per_second),
+                    self.request_timeout,
                 )
             } else {
                 unreachable!();
@@ -125,9 +128,9 @@ impl BenchBatch {
                         .await
                 }),
                 BenchmarkMode::Gcs(gcs_bench_session) => tokio::spawn(async move {
-                    bench_run
-                        .send_load(&gcs_bench_session, metrics_channel)
-                        .await
+                     bench_run
+                         .send_load(&gcs_bench_session, metrics_channel)
+                         .await
                 }),
             });
         }
@@ -178,6 +181,18 @@ impl RateLadder {
                 self.current = self.get_current() + increment;
             }
         }
+    }
+}
+
+impl fmt::Display for BenchBatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "Runs: {}, first run: {:?}, mode: {}",
+            self.runs.len(),
+            self.runs[0],
+            self.mode
+        )
     }
 }
 

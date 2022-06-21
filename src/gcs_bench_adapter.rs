@@ -5,6 +5,8 @@ use crate::mini_client_wrapper::GCSClientAPI;
 use async_trait::async_trait;
 use std::sync::Arc;
 use std::time::Instant;
+use core::fmt;
+
 
 #[derive(Builder, Deserialize, Clone, Debug)]
 pub struct GcsBenchAdapter {
@@ -17,9 +19,9 @@ pub struct GcsBenchAdapter {
 fn map_client_api(name: &str) -> GCSClientAPI {
     if name == "json" {
         GCSClientAPI::Json
-    } else if name == "grpc_no_directpath" {
+    } else if name == "grpc-no-directpath" {
         GCSClientAPI::GrpcNoDirectpath
-    } else if name == "grpc_directpath" {
+    } else if name == "grpc-directpath" {
         GCSClientAPI::GrpcDirectpath
     } else {
         panic!("Oh no, don't recognize {}", name)
@@ -59,6 +61,7 @@ impl BenchmarkProtocolAdapter for GcsBenchAdapter {
                 .status("OK".to_string())
                 .is_success(true)
                 .duration(duration)
+                .fatal_error(false)
                 .build()
                 .expect("RequestStatsBuilder failed")
         } else {
@@ -66,9 +69,16 @@ impl BenchmarkProtocolAdapter for GcsBenchAdapter {
                 .bytes_processed(0)
                 .status(call_result.error_code())
                 .is_success(false)
+                .fatal_error(false)
                 .duration(duration)
                 .build()
                 .expect("Error building RequestStats")
         }
+    }
+}
+
+impl fmt::Display for GcsBenchAdapter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Some Gcs bench adapter")
     }
 }

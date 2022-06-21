@@ -1,5 +1,4 @@
 use crate::bench_session::{BenchSession, BenchSessionBuilder, RateLadder, RateLadderBuilder};
-use crate::gcs_bench_adapter::{GcsBenchAdapter, GcsBenchAdapterBuilder};
 /// Copyright 2020 Developers of the perf-gauge project.
 ///
 /// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
@@ -7,18 +6,26 @@ use crate::gcs_bench_adapter::{GcsBenchAdapter, GcsBenchAdapterBuilder};
 /// <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your
 /// option. This file may not be copied, modified, or distributed
 /// except according to those terms.
-use crate::http_bench_session::{HttpBenchAdapter, HttpBenchAdapterBuilder};
+use crate::http_bench_session::{
+    HttpBenchAdapter, HttpBenchAdapterBuilder, HttpClientConfigBuilder, HttpRequestBuilder,
+};
 use crate::metrics::{DefaultConsoleReporter, ExternalMetricsServiceReporter};
-use crate::prometheus_reporter::PrometheusReporter;
-use clap::{clap_app, ArgMatches};
+use crate::gcs_bench_adapter::{GcsBenchAdapterBuilder, GcsBenchAdapter};
+use clap::Args;
+use clap::ArgEnum;
+use clap::Parser;
+use clap::Subcommand;
 use core::fmt;
-use std::net::SocketAddr;
-use std::process::exit;
-use std::str::FromStr;
+use rand::Rng;
+use std::fs;
+use std::fs::File;
+use std::io::Read;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io;
+use std::str::FromStr;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum BenchmarkMode {
     Http(HttpBenchAdapter),
     Gcs(GcsBenchAdapter),
@@ -29,210 +36,358 @@ pub struct BenchmarkConfig {
     #[builder(default)]
     pub name: Option<String>,
     #[builder(default)]
+    pub continuous: bool,
+    #[builder(default)]
     pub verbose: bool,
     #[builder(default = "1")]
     pub concurrency: usize,
     pub rate_ladder: RateLadder,
     pub mode: BenchmarkMode,
+    request_timeout: Option<Duration>,
     #[builder(default)]
-    pub reporters: Vec<Arc<Box<dyn ExternalMetricsServiceReporter + Send + Sync + 'static>>>,
+    pub reporters: Vec<Arc<dyn ExternalMetricsServiceReporter + Send + Sync + 'static>>,
 }
+
+#[derive(Parser, Debug)]
+#[clap(author, version, about, long_about = None)]
+#[clap(propagate_version = true)]
+struct Cli {
+    /// Concurrent clients. Default `1`.
+    #[clap(short, long, default_value_t = 1)]
+    concurrency: usize,
+    /// Duration of the test.
+    #[clap(short, long)]
+    duration: Option<String>,
+    /// Number of requests per client.
+    #[clap(short, long = "num_req")]
+    num_req: Option<usize>,
+    /// Test case name. Optional. Can be used for tagging metrics.
+    #[clap(short = 'N', long)]
+    name: Option<String>,
+    /// Request rate per second. E.g. 100 or 0.1. By default no limit.
+    #[clap(short, long)]
+    rate: Option<f64>,
+    /// Rate increase step (until it reaches --rate_max).
+    #[clap(long = "rate_step")]
+    rate_step: Option<f64>,
+    /// Max rate per second. Requires --rate-step
+    #[clap(long = "rate_max")]
+    rate_max: Option<f64>,
+    /// takes_value "The number of iterations with the max rate. By default `1`.
+    #[clap(short, long = "max_iter", default_value_t = 1)]
+    max_iter: usize,
+    /// If it's a part of a continuous run. In this case metrics are not reset at the end to avoid saw-like plots.
+    #[clap(long)]
+    continuous: bool,
+    /// Timeout of a single request. E.g. "--request_timeout 30s". Timeouts are treated as fatal errors.
+    #[clap(long = "request_timeout")]
+    request_timeout: Option<String>,
+    /// If you'd like to send metrics to Prometheus PushGateway, specify the server URL. E.g. 10.0.0.1:9091
+    #[clap(long)]
+    prometheus: Option<String>,
+    /// Prometheus Job (by default `pushgateway`)
+    #[clap(long = "prometheus_job")]
+    prometheus_job: Option<String>,
+    #[clap(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    Http(HttpOptions),
+    Gcs(GcsOptions),
+}
+
+#[derive(Args, Debug)]
+#[clap(about = "Run in HTTP(S) mode", long_about = None)]
+#[clap(author, version, long_about = None)]
+#[clap(propagate_version = true)]
+struct HttpOptions {
+    /// Target, e.g. https://my-service.com:8443/8kb Can be multiple ones (with random choice balancing).
+    #[clap()]
+    target: Vec<String>,
+    /// Headers in "Name:Value1" form. E.g. `-H "Authentication:Bearer token" -H "Date:2022-03-17"`
+    /// It can contain multiple values, e.g. "Name:Value1:Value2:Value3". In this case a random one is chosen for each request.
+    #[clap(short = 'H', long)]
+    header: Vec<String>,
+    /// Method. By default GET.
+    #[clap(short = 'M', long)]
+    method: Option<String>,
+    /// Stop immediately on error codes. E.g. `-E 401 -E 403`
+    #[clap(short = 'E', long = "error_stop")]
+    error_stop: Vec<u16>,
+    /// Body of the request. Could be either `random://[0-9]+`, `file://$filename` or `base64://${valid_base64}`. Optional.
+    #[clap(short = 'B', long)]
+    body: Option<String>,
+    /// Allow self signed certificates.
+    #[clap(long = "ignore_cert")]
+    ignore_cert: bool,
+    /// If connections should be re-used.
+    #[clap(long = "conn_reuse")]
+    conn_reuse: bool,
+    /// Enforce HTTP/2 only.
+    #[clap(long = "http2_only")]
+    http2_only: bool,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ArgEnum, Debug)]
+
+enum GcsApiOption {
+    GrpcNoDirectpath,
+    GrpcDirectpath,
+    Json,
+}
+
+#[derive(Args, Debug)]
+#[clap(about = "Run in Google Cloud Storage mode", long_about = None)]
+#[clap(author, version, long_about = None)]
+#[clap(propagate_version = true)]
+struct GcsOptions {
+
+    #[clap(long)]
+    project: String,
+
+    #[clap(long)]
+    bucket: String,
+
+    #[clap(long)]
+    object: String,
+
+    #[clap(long, arg_enum)]
+    api: GcsApiOption,
+}
+
 
 impl BenchmarkConfig {
     pub fn from_command_line() -> io::Result<BenchmarkConfig> {
-        let matches = clap_app!(myapp =>
-            (name: "Performance Gauge")
-            (version: "0.1.7")
-            (author: "Eugene Retunsky")
-            (about: "A tool for gauging performance of network services")
-            (@arg CONCURRENCY: --concurrency -c +takes_value "Concurrent clients. Default `1`.")
-            (@group duration =>
-                (@arg NUMBER_OF_REQUESTS: --num_req -n +takes_value "Number of requests.")
-                (@arg DURATION: --duration -d +takes_value "Duration of the test.")
-            )
-            (@arg TEST_CASE_NAME: --name -N +takes_value "Test case name. Optional. Can be used for tagging metrics.")
-            (@arg RATE: --rate -r +takes_value "Request rate per second. E.g. 100 or 0.1. By default no limit.")
-            (@arg RATE_STEP: --rate_step +takes_value "Rate increase step (until it reaches --rate_max).")
-            (@arg RATE_MAX: --rate_max +takes_value "Max rate per second. Requires --rate-step")
-            (@arg MAX_RATE_ITERATIONS: --max_iter -m +takes_value "The number of iterations with the max rate. By default `1`.")
-            (@arg PROMETHEUS_ADDR: --prometheus +takes_value "If you'd like to send metrics to Prometheus PushGateway, specify the server URL. E.g. 10.0.0.1:9091")
-            (@arg PROMETHEUS_JOB: --prometheus_job +takes_value "Prometheus Job (by default `pushgateway`)")
-            (@subcommand http =>
-                (about: "Run in HTTP(S) mode")
-                (version: "0.1.7")
-                (@arg TUNNEL: --tunnel +takes_value "HTTP Tunnel used for connection, e.g. http://my-proxy.org")
-                (@arg IGNORE_CERT: --ignore_cert "Allow self signed certificates. Applies to the target (not proxy).")
-                (@arg CONN_REUSE: --conn_reuse "If connections should be re-used")
-                (@arg STORE_COOKIES: --store_cookies "If cookies should be stored")
-                (@arg HTTP2_ONLY: --http2_only "Enforce HTTP/2 only")
-                (@arg TARGET: +required ... "Target, e.g. https://my-service.com:8443/8kb Can be multiple ones (with random choice balancing)")
-                (@arg METHOD: --method -M +takes_value "Method. By default GET")
-                (@arg HEADER: --header -H ... "Headers in \"Name:Value\" form. Can be provided multiple times.")
-                (@arg BODY: --body -B  +takes_value "Body of the request in base64. Optional.")
-            )
-            (@subcommand gcs =>
-                (about: "Run in GCS mode")
-                (version: "0.1.7")
-                (@arg PROJECT: --project +takes_value "GCP project id")
-                (@arg BUCKET: --bucket +takes_value "GCS bucket")
-                (@arg OBJECT: --object -O ... "GCS bucket object")
-                (@arg API: --api +takes_value "GCS API name")
-            )
-        ).get_matches();
+        let cli = Cli::parse();
 
-        let test_case_name = matches.value_of("TEST_CASE_NAME").map(|s| s.to_string());
-        let concurrency = matches.value_of("CONCURRENCY").unwrap_or("1");
-        let rate_per_second = matches.value_of("RATE");
-        let rate_step = matches.value_of("RATE_STEP");
-        let rate_max = matches.value_of("RATE_MAX");
-        let max_rate_iterations = matches.value_of("MAX_RATE_ITERATIONS").unwrap_or("1");
+        let concurrency = cli.concurrency;
+        let rate_per_second = cli.rate;
+        let rate_step = cli.rate_step;
+        let rate_max = cli.rate_max;
+        let max_rate_iterations = cli.max_iter;
 
-        let duration = matches.value_of("DURATION").map(|d| {
-            humantime::Duration::from_str(d)
+        let duration = cli.duration.as_ref().map(|d| {
+            humantime::Duration::from_str(d.as_str())
                 .expect("Illegal duration")
                 .into()
         });
 
-        let number_of_requests = matches
-            .value_of("NUMBER_OF_REQUESTS")
-            .map(|n| parse_num(n, "Illegal number for NUMBER_OF_REQUESTS"));
+        let request_timeout = cli.request_timeout.as_ref().map(|d| {
+            humantime::Duration::from_str(d.as_str())
+                .expect("Illegal duration")
+                .into()
+        });
+
+        let number_of_requests = cli.num_req;
+
+        if duration.is_none() && number_of_requests.is_none() {
+            panic!("Either the number of requests or the test duration must be specified");
+        }
 
         let rate_ladder = if let Some(rate_max) = rate_max {
             let rate_per_second =
                 rate_per_second.expect("RATE is required if RATE_MAX is specified");
             let rate_step = rate_step.expect("RATE_STEP is required if RATE_MAX is specified");
             RateLadderBuilder::default()
-                .start(parse_num(rate_per_second, "Cannot parse RATE"))
-                .end(parse_num(rate_max, "Cannot parse RATE_MAX"))
-                .rate_increment(Some(parse_num(rate_step, "Cannot parse RATE_STEP")))
+                .start(rate_per_second)
+                .end(rate_max)
+                .rate_increment(Some(rate_step))
                 .step_duration(duration)
                 .step_requests(number_of_requests)
-                .max_rate_iterations(parse_num(
-                    max_rate_iterations,
-                    "Cannot parse MAX_RATE_ITERATIONS",
-                ))
+                .max_rate_iterations(max_rate_iterations)
                 .build()
                 .expect("RateLadderBuilder failed")
         } else {
-            let rps = parse_num(rate_per_second.unwrap_or("0"), "Cannot parse RATE");
+            let rps = rate_per_second.unwrap_or(0.0);
             RateLadderBuilder::default()
                 .start(rps)
                 .end(rps)
                 .rate_increment(None)
                 .step_duration(duration)
                 .step_requests(number_of_requests)
-                .max_rate_iterations(parse_num(
-                    max_rate_iterations,
-                    "Cannot parse MAX_RATE_ITERATIONS",
-                ))
+                .max_rate_iterations(max_rate_iterations)
                 .build()
                 .expect("RateLadderBuilder failed")
         };
 
-        let mut metrics_destinations: Vec<
-            Arc<Box<dyn ExternalMetricsServiceReporter + Send + Sync + 'static>>,
-        > = vec![Arc::new(Box::new(DefaultConsoleReporter::new(
-            test_case_name.clone(),
-        )))];
-
-        if let Some(prometheus_addr) = matches.value_of("PROMETHEUS_ADDR") {
-            if SocketAddr::from_str(prometheus_addr).is_err() {
-                panic!("Illegal Prometheus Gateway addr `{}`", prometheus_addr);
-            }
-            metrics_destinations.push(Arc::new(Box::new(PrometheusReporter::new(
-                test_case_name.clone(),
-                prometheus_addr.to_string(),
-                matches.value_of("PROMETHEUS_JOB"),
-            ))));
-        }
-
         Ok(BenchmarkConfigBuilder::default()
-            .name(test_case_name)
+            .name(cli.name.clone())
             .rate_ladder(rate_ladder)
-            .concurrency(parse_num(concurrency, "Cannot parse CONCURRENCY"))
+            .concurrency(concurrency)
             .verbose(false)
-            .mode(BenchmarkConfig::build_mode(&matches))
-            .reporters(metrics_destinations)
+            .continuous(cli.continuous)
+            .request_timeout(request_timeout)
+            .mode(BenchmarkConfig::build_mode(&cli))
+            .reporters(BenchmarkConfig::build_metric_destinations(
+                cli.name.clone(),
+                &cli,
+            ))
             .build()
             .expect("BenchmarkConfig failed"))
     }
 
-    fn build_mode(matches: &ArgMatches) -> BenchmarkMode {
-        let mode = if let Some(config) = matches.subcommand_matches("http") {
-            let http_config = HttpBenchAdapterBuilder::default()
-                .url(
-                    config
-                        .values_of("TARGET")
-                        .expect("misconfiguration for TARGET")
-                        .map(|s| s.to_string())
-                        .collect(),
-                )
-                .tunnel(config.value_of("TUNNEL").map(|s| s.to_string()))
-                .ignore_cert(config.is_present("IGNORE_CERT"))
-                .conn_reuse(config.is_present("CONN_REUSE"))
-                .store_cookies(config.is_present("STORE_COOKIES"))
-                .http2_only(config.is_present("HTTP2_ONLY"))
-                .method(config.value_of("METHOD").unwrap_or("GET").to_string())
-                .headers(BenchmarkConfig::get_multiple_values(config, "HEADER"))
-                .body(
-                    config
-                        .value_of("BODY")
-                        .map(|s| base64::decode(s).expect("Invalid base64"))
-                        .unwrap_or_else(Vec::new),
-                )
-                .build()
-                .expect("BenchmarkModeBuilder failed");
-            BenchmarkMode::Http(http_config)
-        } else if let Some(config) = matches.subcommand_matches("gcs") {
-            let gcs_config = GcsBenchAdapterBuilder::default()
-                .gcp_project(
-                    config
-                        .value_of("PROJECT")
-                        .map(|s| s.to_string())
-                        .expect("GCP project is required"),
-                )
-                .bucket(
-                    config
-                        .value_of("BUCKET")
-                        .map(|s| s.to_string())
-                        .expect("GCS bucket is required"),
-                )
-                .object(
-                    config
-                        .value_of("OBJECT")
-                        .map(|s| s.to_string())
-                        .expect("GCS object is required"),
-                )
-                .api(
-                    config
-                        .value_of("API")
-                        .map(|s| s.to_string())
-                        .expect("API name is required: grpc_directpath, grpc_no_directpath, or json"),
-                )
-                .build()
-                .expect("GcsBenchAdapterBuilder failed");
-            BenchmarkMode::Gcs(gcs_config)
-        } else {
-            println!("Run `perf-gauge help` to see program options.");
-            exit(1);
-        };
-        mode
+    #[cfg(not(feature = "report-to-prometheus"))]
+    fn build_metric_destinations(
+        test_case_name: Option<String>,
+        args: &Cli,
+    ) -> Vec<Arc<dyn ExternalMetricsServiceReporter + Send + Sync>> {
+        use std::process::exit;
+
+        if args.prometheus.is_some() {
+            println!("Prometheus is not supported in this configuration");
+            exit(-1);
+        }
+
+        vec![Arc::new(DefaultConsoleReporter::new(test_case_name))]
     }
 
-    fn get_multiple_values(config: &ArgMatches, id: &str) -> Vec<(String, String)> {
-        config
-            .values_of(id)
-            .map(|v| {
-                v.map(|s| {
-                    let mut split = s.split(':');
-                    (
-                        split.next().expect("Header name is missing").to_string(),
-                        split.collect::<Vec<&str>>().join(":"),
+    #[cfg(feature = "report-to-prometheus")]
+    fn build_metric_destinations(
+        test_case_name: Option<String>,
+        args: &Cli,
+    ) -> Vec<Arc<dyn ExternalMetricsServiceReporter + Send + Sync>> {
+        use crate::prometheus_reporter::PrometheusReporter;
+        use std::net::SocketAddr;
+
+        let mut metrics_destinations: Vec<
+            Arc<dyn ExternalMetricsServiceReporter + Send + Sync + 'static>,
+        > = vec![Arc::new(DefaultConsoleReporter::new(
+            test_case_name.clone(),
+        ))];
+
+        if let Some(prometheus_addr) = &args.prometheus {
+            if SocketAddr::from_str(prometheus_addr.as_str()).is_err() {
+                panic!("Illegal Prometheus Gateway addr `{}`", prometheus_addr);
+            }
+            metrics_destinations.push(Arc::new(PrometheusReporter::new(
+                test_case_name,
+                prometheus_addr.to_string(),
+                Some(
+                    args.prometheus_job
+                        .as_ref()
+                        .unwrap_or(&"pushgateway".to_string())
+                        .clone()
+                        .as_str(),
+                ),
+            )));
+        }
+
+        metrics_destinations
+    }
+
+    fn build_mode(args: &Cli) -> BenchmarkMode {
+        match &args.command {
+            Commands::Gcs(config) => {
+                let gcs_config = GcsBenchAdapterBuilder::default()
+                    .bucket(config.bucket.clone())
+                    .gcp_project(config.project.clone())
+                    .object(config.object.clone())
+                    .api(String::from(match config.api {
+                        GcsApiOption::GrpcNoDirectpath => "grpc-no-directpath",
+                        GcsApiOption::GrpcDirectpath => "grpc-directpath",
+                        GcsApiOption::Json => "json"
+                    }))
+                    .build()
+                    .expect("GCSBenchmarkBuilder failed");
+                BenchmarkMode::Gcs(gcs_config)
+            }
+            Commands::Http(config) => {
+                #[cfg(feature = "tls-boring")]
+                if config.ignore_cert {
+                    use std::process::exit;
+
+                    println!("--ignore_cert is not supported for BoringSSL");
+                    exit(-1);
+                }
+
+                if config.target.len() == 0 {
+                    use std::process::exit;
+
+                    println!("Must include at least one target.");
+                    exit(-1);
+                }
+
+                let http_config = HttpBenchAdapterBuilder::default()
+                    .config(
+                        HttpClientConfigBuilder::default()
+                            .ignore_cert(config.ignore_cert)
+                            .conn_reuse(config.conn_reuse)
+                            .http2_only(config.http2_only)
+                            .stop_on_errors(config.error_stop.clone())
+                            .build()
+                            .expect("HttpClientConfigBuilder failed"),
                     )
-                })
-                .collect()
-            })
-            .unwrap_or_else(Vec::new)
+                    .request(
+                        HttpRequestBuilder::default()
+                            .url(config.target.clone())
+                            .method(config.method.as_ref().unwrap_or(&"GET".to_string()).clone())
+                            .headers(
+                                config
+                                    .header
+                                    .iter()
+                                    .map(|s| {
+                                        let mut split = s.split(':');
+                                        (
+                                            split
+                                                .next()
+                                                .expect("Header name is missing")
+                                                .to_string(),
+                                            split.map(String::from).collect::<Vec<String>>(),
+                                        )
+                                    })
+                                    .collect(),
+                            )
+                            .body(BenchmarkConfig::generate_body(config))
+                            .build()
+                            .expect("HttpRequestBuilder failed"),
+                    )
+                    .build()
+                    .expect("BenchmarkModeBuilder failed");
+                BenchmarkMode::Http(http_config)
+            }
+        }
+    }
+
+    fn generate_body(args: &HttpOptions) -> Vec<u8> {
+        const RANDOM_PREFIX: &str = "random://";
+        const BASE64_PREFIX: &str = "base64://";
+        const FILE_PREFIX: &str = "file://";
+
+        if let Some(body_value) = &args.body {
+            if let Some(body_size) = body_value.strip_prefix(RANDOM_PREFIX) {
+                BenchmarkConfig::generate_random_vec(body_size)
+            } else if let Some(base64) = body_value.strip_prefix(BASE64_PREFIX) {
+                base64::decode(base64).expect("Invalid base64")
+            } else if let Some(filename) = body_value.strip_prefix(FILE_PREFIX) {
+                BenchmarkConfig::read_file_as_vec(filename)
+            } else {
+                panic!("Unsupported format: {}", body_value);
+            }
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn generate_random_vec(size: &str) -> Vec<u8> {
+        let body_size = size
+            .parse::<u32>()
+            .expect("Body must have format 'RND:NUMBER', where NUMBER is a positive integer");
+        let mut rng = rand::thread_rng();
+        let random_data: Vec<u8> = (0..body_size).map(|_| rng.gen()).collect();
+        random_data
+    }
+
+    fn read_file_as_vec(filename: &str) -> Vec<u8> {
+        let mut f = File::open(&filename).expect("File not found");
+        let metadata = fs::metadata(&filename).expect("Cannot get metadata");
+        let mut buffer = vec![0; metadata.len() as usize];
+        f.read_exact(&mut buffer)
+            .map_err(|e| panic!("Error reading file {}: {}", filename, e))
+            .unwrap();
+
+        buffer
     }
 
     pub fn new_bench_session(&mut self) -> BenchSession {
@@ -240,6 +395,7 @@ impl BenchmarkConfig {
             .concurrency(self.concurrency)
             .rate_ladder(self.rate_ladder.clone())
             .mode(Arc::new(self.mode.clone()))
+            .request_timeout(self.request_timeout)
             .build()
             .expect("BenchSessionBuilder failed")
     }
@@ -249,17 +405,35 @@ impl fmt::Display for BenchmarkConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Mode={:?}, RateLadder={:?}, Concurrency={}",
+            "Mode={}, RateLadder={:?}, Concurrency={}",
             self.mode, self.rate_ladder, self.concurrency
         )
     }
 }
 
-pub fn parse_num<F: FromStr>(s: &str, error_msg: &str) -> F {
-    s.parse()
-        .map_err(|_| {
-            println!("{}", error_msg);
-            panic!("Cannot start");
-        })
-        .unwrap()
+
+
+impl fmt::Display for GcsApiOption {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        
+        let name: &str = match *self {
+            GcsApiOption::GrpcDirectpath => "GrpcDirectpath",
+            GcsApiOption::GrpcNoDirectpath => "GrpcNoDirectpath",
+            GcsApiOption::Json => "Json",
+        };
+        write!(f, "{}", name)
+    }
+}
+
+impl fmt::Display for BenchmarkMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BenchmarkMode::Http(mode) => {
+                writeln!(f, "{}", mode)
+            }
+            BenchmarkMode::Gcs(mode) => {
+                writeln!(f, "{}", mode)
+            }
+        }
+    }
 }

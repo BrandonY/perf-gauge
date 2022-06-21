@@ -16,9 +16,14 @@ mod configuration;
 mod gcs_bench_adapter;
 mod http_bench_session;
 mod metrics;
+#[cfg(feature = "report-to-prometheus")]
 mod prometheus_reporter;
 mod rate_limiter;
-mod mini_client;
+mod mini_client {
+    #![allow(non_upper_case_globals)]
+    #![allow(non_camel_case_types)]
+    include!("mini_client.rs");
+}
 mod mini_client_wrapper;
 
 use crate::configuration::BenchmarkConfig;
@@ -30,12 +35,18 @@ use log4rs::config::{Appender, Root};
 use log4rs::Config;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
-use std::thread;
 use std::thread::JoinHandle;
+use std::{panic, process, thread};
 use tokio::io;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
+    // terminate on panic
+    panic::set_hook(Box::new(|info| {
+        eprintln!("Exiting on panic: {}", info);
+        process::exit(0x1);
+    }));
+
     let mut benchmark_config = BenchmarkConfig::from_command_line().map_err(|e| {
         println!("Failed to process parameters. Exiting.");
         e
@@ -46,11 +57,11 @@ async fn main() -> io::Result<()> {
     info!("Starting with configuration {}", benchmark_config);
 
     let (reporter_task, batch_metric_sender) =
-        create_async_metrics_channel(benchmark_config.reporters.clone());
+        create_async_metrics_channel(&benchmark_config.reporters, benchmark_config.continuous);
     let bench_session = benchmark_config.new_bench_session();
 
     for batch in bench_session {
-        info!("Running next batch {:?}", batch);
+        info!("Running next batch {}", batch);
         let metrics = BenchRunMetrics::new();
         let batch_run_result = batch.run(metrics).await;
         match batch_run_result {
@@ -76,7 +87,8 @@ fn shutdown(reporter_task: JoinHandle<()>, batch_metric_sender: Sender<BenchRunM
 }
 
 fn create_async_metrics_channel(
-    metric_reporters: Vec<Arc<Box<dyn ExternalMetricsServiceReporter + Send + Sync + 'static>>>,
+    metric_reporters: &[Arc<dyn ExternalMetricsServiceReporter + Send + Sync + 'static>],
+    continuous: bool,
 ) -> (JoinHandle<()>, Sender<BenchRunMetrics>) {
     // We need to report metrics in a separate threads,
     // as at the moment of writing this code not all major metric client libraries
@@ -84,6 +96,7 @@ fn create_async_metrics_channel(
     // We can replace it with `tokio::sync::mpsc` and `tokio::spawn` at any time
     println!("Getting ready to send metrics");
     let (sender, receiver) = std::sync::mpsc::channel();
+    let metric_reporters = metric_reporters.to_owned();
     let reporter_task = thread::spawn(move || {
         while let Ok(stats) = receiver.recv() {
             println!("Going to try to report a metric");
@@ -96,8 +109,12 @@ fn create_async_metrics_channel(
                 }
             }
         }
-        for reporter in &metric_reporters {
-            reporter.shutdown();
+        // for continuous runs we don't want to reset metrics
+        // to avoid saw-like graphs
+        if !continuous {
+            for reporter in metric_reporters {
+                reporter.reset_metrics();
+            }
         }
     });
     (reporter_task, sender)

@@ -56,8 +56,17 @@ sudo yum install pkg-config openssl-devel
 
 Then:
 ```
-$ cargo install perf-gauage
+$ cargo install perf-gauage --features full
 ```
+
+Supported features:
+
+* `default` - if no features specified, only `http` traffic is supported
+* `tls-native` - TLS support (based on `OpenSSL`)
+* `tls-boring` - TLS support (based on `BoringSSL`). Doesn't support self-signed certs.
+* `report-to-prometheus` - to support `Prometheus` for metric collection
+* `full` - `report-to-prometheus` + `tls-native`
+* `full-boring` - `report-to-prometheus` + `tls-boring`
 
 Usage
 =======
@@ -66,38 +75,59 @@ $ perf-gauge help
 ```
 
 ```text
-A tool for gauging performance of network services
+Gauging performance of network services. Snapshot or continuous, supports Prometheus metrics.
 
 USAGE:
-    perf-gauge [OPTIONS] [SUBCOMMAND]
-
-FLAGS:
-    -h, --help       Prints help information
-    -V, --version    Prints version information
+    perf-gauge [OPTIONS] <SUBCOMMAND>
 
 OPTIONS:
-    -c, --concurrency <CONCURRENCY>          Concurrent clients. Default `1`.
-    -d, --duration <DURATION>                Duration of the test.
-    -m, --max_iter <MAX_RATE_ITERATIONS>
-            The number of iterations with the max rate. By default `1`.
+    -c, --concurrency <CONCURRENCY>
+            Concurrent clients. Default `1` [default: 1]
 
-    -n, --num_req <NUMBER_OF_REQUESTS>       Number of requests.
-        --prometheus <PROMETHEUS_ADDR>
+        --continuous
+            If it's a part of a continuous run. In this case metrics are not reset at the end to
+            avoid saw-like plots
+
+    -d, --duration <DURATION>
+            Duration of the test
+
+    -h, --help
+            Print help information
+
+    -m, --max_iter <MAX_ITER>
+            takes_value "The number of iterations with the max rate. By default `1` [default: 1]
+
+    -n, --num_req <NUM_REQ>
+            Number of requests per client
+
+    -N, --name <NAME>
+            Test case name. Optional. Can be used for tagging metrics
+
+        --prometheus <PROMETHEUS>
             If you'd like to send metrics to Prometheus PushGateway, specify the server URL. E.g.
             10.0.0.1:9091
 
-        --prometheus_job <PROMETHEUS_JOB>    Prometheus Job (by default `pushgateway`)
+        --prometheus_job <PROMETHEUS_JOB>
+            Prometheus Job (by default `pushgateway`)
+
     -r, --rate <RATE>
-            Request rate per second. E.g. 100 or 0.1. By default no limit.
+            Request rate per second. E.g. 100 or 0.1. By default no limit
 
-        --rate_max <RATE_MAX>                Max rate per second. Requires --rate-step
-        --rate_step <RATE_STEP>              Rate increase step (until it reaches --rate_max).
-    -N, --name <TEST_CASE_NAME>
-            Test case name. Optional. Can be used for tagging metrics.
+        --rate_max <RATE_MAX>
+            Max rate per second. Requires --rate-step
 
+        --rate_step <RATE_STEP>
+            Rate increase step (until it reaches --rate_max)
+            
+        --request_timeout <REQUEST_TIMEOUT>
+           Timeout of a single request. E.g. "--request_timeout 30s". Timeouts are treated as fatal
+           errors
+
+    -V, --version
+            Print version information
 
 SUBCOMMANDS:
-    help    Prints this message or the help of the given subcommand(s)
+    help    Print this message or the help of the given subcommand(s)
     http    Run in HTTP(S) mode
 ```
 
@@ -110,39 +140,42 @@ $ perf-gauge help http
 Run in HTTP(S) mode
 
 USAGE:
-    perf-gauge http [FLAGS] [OPTIONS] <TARGET>...
+    perf-gauge http [OPTIONS] [TARGET]...
 
 ARGS:
     <TARGET>...    Target, e.g. https://my-service.com:8443/8kb Can be multiple ones (with
                    random choice balancing)
 
-FLAGS:
-        --conn_reuse       If connections should be re-used
-        --http2_only       Enforce HTTP/2 only
-        --ignore_cert      Allow self signed certificates. Applies to the target (not proxy).
-        --store_cookies    If cookies should be stored
-    -h, --help             Prints help information
-    -V, --version          Prints version information
 
 OPTIONS:
-    -B, --body <BODY>           Body of the request in base64. Optional.
-    -H, --header <HEADER>...    Headers in "Name:Value" form. Can be provided multiple times.
-    -M, --method <METHOD>       Method. By default GET
-        --tunnel <TUNNEL>       HTTP Tunnel used for connection, e.g. http://my-proxy.org
+    -B, --body <BODY>                Body of the request. Could be either `random://[0-9]+`,
+                                     `file://$filename` or `base64://${valid_base64}`. Optional
+        --conn_reuse                 If connections should be re-used
+    -E, --error_stop <ERROR_STOP>    Stop immediately on error codes. E.g. `-E 401 -E 403`
+    -h, --help                       Print help information
+    -H, --header <HEADER>            Headers in \"Name:Value1\" form. Can be provided multiple
+                                     times. It can contain multiple values, e.g.
+                                     \"Name:Value1:Value2:Value3\". In this case a random one is
+                                     chosen for each request
+        --http2_only                 Enforce HTTP/2 only
+        --ignore_cert                Allow self signed certificates
+    -M, --method <METHOD>            Method. By default GET
+    -V, --version                    Print version information
+
 ```
 
 For example, test an endpoint using a single run, 5 seconds (max possible request rate):
 
 ```bash
 $ perf-gauge --concurrency 10 \
-               --duration 10s \
+               --duration 1m \
                http http://localhost/10kb --conn_reuse
 ```
   
 Parameters:
 
 * `--concurrency 10` - the number of clients generating load concurrently
-* `--duration 60s` - step duration `60s`
+* `--duration 1m` - step duration `1m` (or `10s`, `5m`, etc.)
 * `http http://local-nginx.org/10kb --conn_reuse` - run in `http` mode to the given endpoint, reusing connections. 
 
 Reporting performance metrics to Prometheus
@@ -156,17 +189,19 @@ E.g. increase RPS each minute by 1,000:
 export PROMETHEUS_HOST=10.138.0.2
 
 $ perf-gauge --concurrency 10 \
+               --request_timeout 30s \
                --rate 1000 --rate_step 1000 --rate_max 25000 \
                --max_iter 15 \
-               --duration 60s \
+               --duration 1m \
                --name nginx-direct \
                --prometheus $PROMETHEUS_HOST:9091 \
                http https://localhost/10kb --conn_reuse --ignore_cert
 ```
 
 * `--concurrency 10` - the number of clients generating load concurrently
+* `--request_timeout 30s` - do not wait for response longer than 30 seconds and stop execution on timeouts.
 * `--rate 1000 --rate_step 1000 --rate_max 25000` - start with rate 1000 rps, then add 1000 rps after each step until it reaches 25k.
-* `--duration 60s` - step duration `60s`
+* `--duration 1m` - step duration `1m`
 * `--max_iter 15` - perform `15` iterations at the max rate
 * `--name nginx-direct` - the name of the test (used for reporting metrics to `prometheus`)
 * `--prometheus $PROMETHEUS_HOST:9091` - push-gateway `host:port` to send metrics to Prometheus.
