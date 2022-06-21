@@ -75,7 +75,7 @@ impl BenchmarkConfig {
                 (version: "0.1.7")
                 (@arg PROJECT: --project +takes_value "GCP project id")
                 (@arg BUCKET: --bucket +takes_value "GCS bucket")
-                (@arg OBJECT: --object -O ... "GCS bucket objects")
+                (@arg OBJECT: --object -O ... "GCS bucket object")
                 (@arg API: --api +takes_value "GCS API name")
             )
         ).get_matches();
@@ -197,12 +197,11 @@ impl BenchmarkConfig {
                         .map(|s| s.to_string())
                         .expect("GCS bucket is required"),
                 )
-                .objects(
+                .object(
                     config
-                        .values_of("OBJECT")
-                        .expect("misconfiguration for OBJECT")
+                        .value_of("OBJECT")
                         .map(|s| s.to_string())
-                        .collect(),
+                        .expect("GCS object is required"),
                 )
                 .api(
                     config

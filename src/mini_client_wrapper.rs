@@ -27,6 +27,16 @@ impl GCSClient {
   }
 }
 
+impl CallResult {
+  pub fn error_code(&self) -> String {
+    let s = match unsafe{std::ffi::CStr::from_ptr(self.error_code.as_ptr())}.to_str() {
+      Ok(valid_str) => valid_str,
+      Err(utf8_failure) => panic!("Failure decoding string {}", utf8_failure),
+    };
+    String::from(s)
+  }
+}
+
 
 impl Drop for GCSClient {
   fn drop(&mut self) {

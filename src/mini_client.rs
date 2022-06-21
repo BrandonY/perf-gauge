@@ -14,12 +14,13 @@ pub struct GoogleStorageClient {
 pub struct CallResult {
     pub success: bool,
     pub bytes_received: ::std::os::raw::c_ulong,
+    pub error_code: [::std::os::raw::c_char; 25usize],
 }
 #[test]
 fn bindgen_test_layout_CallResult() {
     assert_eq!(
         ::std::mem::size_of::<CallResult>(),
-        16usize,
+        48usize,
         concat!("Size of: ", stringify!(CallResult))
     );
     assert_eq!(
@@ -61,6 +62,23 @@ fn bindgen_test_layout_CallResult() {
         );
     }
     test_field_bytes_received();
+    fn test_field_error_code() {
+        assert_eq!(
+            unsafe {
+                let uninit = ::std::mem::MaybeUninit::<CallResult>::uninit();
+                let ptr = uninit.as_ptr();
+                ::std::ptr::addr_of!((*ptr).error_code) as usize - ptr as usize
+            },
+            16usize,
+            concat!(
+                "Offset of field: ",
+                stringify!(CallResult),
+                "::",
+                stringify!(error_code)
+            )
+        );
+    }
+    test_field_error_code();
 }
 extern "C" {
     pub fn CreateGCSClient(
