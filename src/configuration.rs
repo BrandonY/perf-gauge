@@ -159,7 +159,7 @@ struct GcsOptions {
     bucket: String,
 
     #[clap(long)]
-    object: String,
+    objects: Vec<String>,
 
     #[clap(long, arg_enum)]
     api: GcsApiOption,
@@ -294,7 +294,7 @@ impl BenchmarkConfig {
                 let gcs_config = GcsBenchAdapterBuilder::default()
                     .bucket(config.bucket.clone())
                     .gcp_project(config.project.clone())
-                    .object(config.object.clone())
+                    .objects(config.objects.clone())
                     .api(String::from(match config.api {
                         GcsApiOption::GrpcNoDirectpath => "grpc-no-directpath",
                         GcsApiOption::GrpcDirectpath => "grpc-directpath",

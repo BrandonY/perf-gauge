@@ -6,8 +6,10 @@ use async_trait::async_trait;
 use core::fmt;
 use std::sync::Arc;
 use std::time::Instant;
+use rand::{thread_rng, Rng};
 
-#[derive(Deserialize, Clone, Debug)]
+
+#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum GcsBenchScenario {
     ReadObject,
     QueryWriteStatus,
@@ -18,7 +20,7 @@ pub struct GcsBenchAdapter {
     gcp_project: String,
     api: String,
     bucket: String,
-    object: String,
+    objects: Vec<String>,
     scenario: GcsBenchScenario,
 
     #[builder(default)]
@@ -44,7 +46,7 @@ impl GcsBenchAdapter {
     ) -> RequestStats {
         let client = client.clone();
         let bucket = self.bucket.clone();
-        let object = self.object.clone();
+        let object = self.objects[thread_rng().gen_range(0..self.objects.len())].clone();
 
         let (duration, call_result) = tokio::task::spawn_blocking(move || {
             let start_time = Instant::now();
@@ -129,19 +131,23 @@ impl BenchmarkProtocolAdapter for GcsBenchAdapter {
     }
 
     async fn initialize_workload(&mut self, client: &Self::Client) -> Result<(), String> {
-        println!("Initializing workload");
-        let client = client.clone();
-        let bucket = self.bucket.clone();
-        let object = self.object.clone();
-        let call_result =
-            tokio::task::spawn_blocking(move || client.start_resumable_write(bucket, object))
-                .await
-                .unwrap();
-        if !call_result.success {
-            Result::Err(String::from("Failed to initialize an upload, aborting"))
+        if self.scenario == GcsBenchScenario::QueryWriteStatus {
+            println!("Initializing workload");
+            let client = client.clone();
+            let bucket = self.bucket.clone();
+            let object = self.objects[thread_rng().gen_range(0..self.objects.len())].clone();
+            let call_result =
+                tokio::task::spawn_blocking(move || client.start_resumable_write(bucket, object))
+                    .await
+                    .unwrap();
+            if !call_result.success {
+                Result::Err(String::from("Failed to initialize an upload, aborting"))
+            } else {
+                self.upload_id = call_result.upload_id();
+                println!("Upload ID is {}", self.upload_id);
+                Ok(())
+            }
         } else {
-            self.upload_id = call_result.upload_id();
-            println!("Upload ID is {}", self.upload_id);
             Ok(())
         }
     }
