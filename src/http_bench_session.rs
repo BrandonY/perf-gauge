@@ -123,6 +123,10 @@ impl BenchmarkProtocolAdapter for HttpBenchAdapter {
             .build(self.build_connector()))
     }
 
+    async fn initialize_workload(&mut self, _client: &Self::Client) -> Result<(), String> {
+        Ok(())
+    }
+
     async fn send_request(&self, client: &Self::Client) -> RequestStats {
         let start = Instant::now();
         let request = self.request.build_request();
@@ -363,7 +367,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let client = http_bench.build_client().expect("Client is built");
+        let client = http_bench.build_client().await.expect("Client is built");
         let stats = http_bench.send_request(&client).await;
 
         println!("{:?}", stats);
@@ -407,7 +411,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let client = http_bench.build_client().expect("Client is built");
+        let client = http_bench.build_client().await.expect("Client is built");
 
         for _ in 0..128 {
             http_bench.send_request(&client).await;

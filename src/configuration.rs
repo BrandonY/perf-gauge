@@ -10,7 +10,7 @@ use crate::http_bench_session::{
     HttpBenchAdapter, HttpBenchAdapterBuilder, HttpClientConfigBuilder, HttpRequestBuilder,
 };
 use crate::metrics::{DefaultConsoleReporter, ExternalMetricsServiceReporter};
-use crate::gcs_bench_adapter::{GcsBenchAdapterBuilder, GcsBenchAdapter};
+use crate::gcs_bench_adapter::{GcsBenchAdapterBuilder, GcsBenchAdapter, GcsBenchScenario};
 use clap::Args;
 use clap::ArgEnum;
 use clap::Parser;
@@ -138,6 +138,14 @@ enum GcsApiOption {
     Json,
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ArgEnum, Debug)]
+
+enum GcsScenario {
+    ReadObject,
+    QueryWriteStatus,
+}
+
+
 #[derive(Args, Debug)]
 #[clap(about = "Run in Google Cloud Storage mode", long_about = None)]
 #[clap(author, version, long_about = None)]
@@ -155,6 +163,9 @@ struct GcsOptions {
 
     #[clap(long, arg_enum)]
     api: GcsApiOption,
+
+    #[clap(long, arg_enum)]
+    scenario: GcsScenario,
 }
 
 
@@ -289,6 +300,10 @@ impl BenchmarkConfig {
                         GcsApiOption::GrpcDirectpath => "grpc-directpath",
                         GcsApiOption::Json => "json"
                     }))
+                    .scenario(match config.scenario {
+                        GcsScenario::ReadObject => GcsBenchScenario::ReadObject,
+                        GcsScenario::QueryWriteStatus => GcsBenchScenario::QueryWriteStatus
+                    })
                     .build()
                     .expect("GCSBenchmarkBuilder failed");
                 BenchmarkMode::Gcs(gcs_config)

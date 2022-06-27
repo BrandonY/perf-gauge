@@ -44,7 +44,7 @@ mockito = "0.28"
 tokio-test = "0.4"
 
 [features]
-default = []
+default = ["report-to-prometheus", "prometheus"]
 report-to-prometheus = ["prometheus"]
 tls = ["hyper-tls"]
 tls-native = ["tls", "native-tls", "tokio-native-tls"]

@@ -33,6 +33,7 @@ pub trait BenchmarkProtocolAdapter {
     type Client;
 
     async fn build_client(&self) -> Result<Self::Client, String>;
+    async fn initialize_workload(&mut self, client: &Self::Client) -> Result<(), String>;
     async fn send_request(&self, client: &Self::Client) -> RequestStats;
 }
 
@@ -94,10 +95,11 @@ impl BenchRun {
 
     pub async fn send_load(
         mut self,
-        bench_protocol_adapter: &impl BenchmarkProtocolAdapter,
+        bench_protocol_adapter: &mut impl BenchmarkProtocolAdapter,
         metrics_channel: Sender<RequestStats>,
     ) -> Result<(), String> {
         let client = bench_protocol_adapter.build_client().await?;
+        bench_protocol_adapter.initialize_workload(&client).await?;
 
         while self.has_more_work() {
             self.rate_limiter

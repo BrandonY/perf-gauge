@@ -15,12 +15,13 @@ pub struct CallResult {
     pub success: bool,
     pub bytes_received: ::std::os::raw::c_ulong,
     pub error_code: [::std::os::raw::c_char; 25usize],
+    pub upload_id: [::std::os::raw::c_char; 256usize],
 }
 #[test]
 fn bindgen_test_layout_CallResult() {
     assert_eq!(
         ::std::mem::size_of::<CallResult>(),
-        48usize,
+        304usize,
         concat!("Size of: ", stringify!(CallResult))
     );
     assert_eq!(
@@ -79,6 +80,23 @@ fn bindgen_test_layout_CallResult() {
         );
     }
     test_field_error_code();
+    fn test_field_upload_id() {
+        assert_eq!(
+            unsafe {
+                let uninit = ::std::mem::MaybeUninit::<CallResult>::uninit();
+                let ptr = uninit.as_ptr();
+                ::std::ptr::addr_of!((*ptr).upload_id) as usize - ptr as usize
+            },
+            41usize,
+            concat!(
+                "Offset of field: ",
+                stringify!(CallResult),
+                "::",
+                stringify!(upload_id)
+            )
+        );
+    }
+    test_field_upload_id();
 }
 extern "C" {
     pub fn CreateGCSClient(
@@ -94,5 +112,24 @@ extern "C" {
         client: *mut GoogleStorageClient,
         bucket: *const ::std::os::raw::c_char,
         obj: *const ::std::os::raw::c_char,
+    ) -> CallResult;
+}
+extern "C" {
+    pub fn StartResumableWrite(
+        client: *mut GoogleStorageClient,
+        bucket: *const ::std::os::raw::c_char,
+        obj: *const ::std::os::raw::c_char,
+    ) -> CallResult;
+}
+extern "C" {
+    pub fn QueryWriteStatus(
+        client: *mut GoogleStorageClient,
+        upload_id: *const ::std::os::raw::c_char,
+    ) -> CallResult;
+}
+extern "C" {
+    pub fn DeleteWrite(
+        client: *mut GoogleStorageClient,
+        upload_id: *const ::std::os::raw::c_char,
     ) -> CallResult;
 }
