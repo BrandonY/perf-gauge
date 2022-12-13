@@ -20,6 +20,7 @@ pub struct DefaultConsoleReporter {
 pub struct BenchRunMetrics {
     pub(crate) combined: BenchRunMetricsItem,
     pub(crate) by_operation: HashMap<String, BenchRunMetricsItem>,
+    pub(crate) by_cell: HashMap<String, BenchRunMetricsItem>,
 }
 
 #[derive(Clone)]
@@ -37,6 +38,7 @@ pub struct BenchRunMetricsItem {
 struct BenchRunReport {
     combined: BenchRunReportItem,
     by_operation: HashMap<String, BenchRunReportItem>,
+    by_cell: HashMap<String, BenchRunReportItem>,
 }
 
 /// Default reporter that prints stats to console.
@@ -62,6 +64,7 @@ pub struct RequestStats {
     #[builder(default = "None")]
     pub operation_name: Option<String>,
     pub fatal_error: bool,
+    pub cell: Option<String>,
 }
 
 impl BenchRunMetrics {
@@ -69,11 +72,16 @@ impl BenchRunMetrics {
         Self {
             combined: BenchRunMetricsItem::new(),
             by_operation: HashMap::new(),
+            by_cell: HashMap::new(),
         }
     }
 
     pub fn report_request(&mut self, stats: RequestStats) {
         self.combined.report_request(&stats);
+        if let Some(cell_name) = stats.cell.as_ref() {
+            self.by_cell
+                .entry(cell_name.to_owned()).or_insert_with(BenchRunMetricsItem::new).report_request(&stats);
+        }
         if let Some(operation_name) = stats.operation_name.as_ref() {
             self.by_operation
                 .entry(operation_name.to_owned())
@@ -324,6 +332,12 @@ impl DefaultConsoleReporter {
         sorted_operation_name
     }
 
+    fn sorted_cells(metrics: &BenchRunMetrics) -> Vec<String> {
+        let sorted_cell_name: Vec<String> =
+            metrics.by_cell.keys().map(|s| s.to_owned()).collect();
+        sorted_cell_name
+    }
+
     fn build_report(&self, metrics: &BenchRunMetrics) -> BenchRunReport {
         let mut by_operation = HashMap::new();
         let sorted_operation_name = DefaultConsoleReporter::sorted_operations(metrics);
@@ -338,9 +352,20 @@ impl DefaultConsoleReporter {
                 ),
             );
         }
+        let mut by_cell = HashMap::new();
+        let sorted_cell_name = DefaultConsoleReporter::sorted_cells(metrics);
+        for cell in sorted_cell_name {
+            by_cell.insert(
+                cell.to_owned(),
+                self.build_item_report(
+                    metrics.by_cell.get(&cell).expect("Cell key cannot be missing"),
+                ),
+            );
+        }
         BenchRunReport {
             combined: self.build_item_report(&metrics.combined),
             by_operation,
+            by_cell,
         }
     }
 
@@ -396,6 +421,7 @@ mod tests {
                 duration: Default::default(),
                 operation_name: None,
                 fatal_error: false,
+                cell: None,
             });
         }
 
@@ -426,6 +452,7 @@ mod tests {
                 duration: Duration::from_micros(i),
                 operation_name: None,
                 fatal_error: false,
+                cell: None,
             });
         }
 
@@ -458,6 +485,7 @@ mod tests {
                     Some("OperationB".to_string())
                 },
                 fatal_error: false,
+                cell: None,
             });
         }
 
@@ -512,6 +540,76 @@ mod tests {
     }
 
     #[test]
+    fn test_by_cell_reporting() {
+        let mut metrics = BenchRunMetrics::new();
+        for i in 0..1000 {
+            metrics.report_request(RequestStats {
+                is_success: true,
+                bytes_processed: 0,
+                status: "200 OK".to_string(),
+                duration: Duration::from_micros(i),
+                operation_name: None,
+                cell: if i % 2 == 0 {
+                    Some("yh".to_string())
+                } else {
+                    Some("tf".to_string())
+                },
+                fatal_error: false,
+            });
+        }
+
+        let report = DefaultConsoleReporter::new(None).build_report(&metrics);
+        let mut items = report.combined.latency_summary.to_owned().into_iter();
+
+        assert_eq!(Some(("Min".to_string(), 0)), items.next());
+        assert_eq!(Some(("p50".to_string(), 500)), items.next());
+        assert_eq!(Some(("p90".to_string(), 900)), items.next());
+        assert_eq!(Some(("p99".to_string(), 990)), items.next());
+        assert_eq!(Some(("p99.9".to_string(), 999)), items.next());
+        assert_eq!(Some(("p99.99".to_string(), 999)), items.next());
+        assert_eq!(Some(("Max".to_string(), 999)), items.next());
+        assert_eq!(Some(("Mean".to_string(), 500)), items.next());
+        assert_eq!(Some(("StdDev".to_string(), 289)), items.next());
+
+        assert_eq!(report.by_cell.len(), 2);
+
+        let mut items = report
+            .by_cell
+            .get("yh")
+            .unwrap()
+            .latency_summary
+            .to_owned()
+            .into_iter();
+        assert_eq!(Some(("Min".to_string(), 0)), items.next());
+        assert_eq!(Some(("p50".to_string(), 500)), items.next());
+        assert_eq!(Some(("p90".to_string(), 900)), items.next());
+        assert_eq!(Some(("p99".to_string(), 990)), items.next());
+        assert_eq!(Some(("p99.9".to_string(), 998)), items.next());
+        assert_eq!(Some(("p99.99".to_string(), 998)), items.next());
+        assert_eq!(Some(("Max".to_string(), 998)), items.next());
+        assert_eq!(Some(("Mean".to_string(), 499)), items.next());
+        assert_eq!(Some(("StdDev".to_string(), 289)), items.next());
+
+        let mut items = report
+            .by_cell
+            .get("tf")
+            .unwrap()
+            .latency_summary
+            .to_owned()
+            .into_iter();
+        assert_eq!(Some(("Min".to_string(), 1)), items.next());
+        assert_eq!(Some(("p50".to_string(), 501)), items.next());
+        assert_eq!(Some(("p90".to_string(), 901)), items.next());
+        assert_eq!(Some(("p99".to_string(), 991)), items.next());
+        assert_eq!(Some(("p99.9".to_string(), 999)), items.next());
+        assert_eq!(Some(("p99.99".to_string(), 999)), items.next());
+        assert_eq!(Some(("Max".to_string(), 999)), items.next());
+        assert_eq!(Some(("Mean".to_string(), 501)), items.next());
+        assert_eq!(Some(("StdDev".to_string(), 289)), items.next());
+    }
+
+
+    #[test]
     fn test_has_more_work_request_limit() {
         let requests = 10;
         let mut metrics =
@@ -545,6 +643,7 @@ mod tests {
                 duration: Duration::from_micros(i),
                 operation_name: None,
                 fatal_error: false,
+                cell: None,
             });
         }
 

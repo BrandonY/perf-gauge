@@ -1,7 +1,7 @@
 #!/bin/bash
 
-OBJECT=will_never_finalize
-TEST_NAME=query-write-status
+OBJECT="writes/tmp/obj"
+TEST_NAME=10-byte-nonresumable-writes
 
 export LD_LIBRARY_PATH=./libs:$LD_LIBRARY_PATH
 export GRPC_XDS_EXPERIMENTAL_ENABLE_AGGREGATE_AND_LOGICAL_DNS_CLUSTER=true
@@ -18,26 +18,29 @@ else
 	UNIVERSE="prod"
 	BUCKET_PREFIX="gcs-grpc-team-perf-testing"
 fi
-BUCKET="${BUCKET_PREFIX}-${LOCATION}-${TEST_NAME}"
+BUCKET="${BUCKET_PREFIX}-${LOCATION}-10-byte-nonresumable-w"
 
 ./target/release/perf-gauge --prometheus $PROMETHEUS \
 	--prometheus_label=location=${LOCATION},api=gRPC,universe=${UNIVERSE} --name $TEST_NAME \
 	--concurrency 1 --duration 1m --max_iter 1000000 --continuous \
-	gcs --api grpc-directpath --universe=${UNIVERSE} \
-	--scenario query-write-status \
-	--project $PROJECT --bucket $BUCKET --objects $OBJECT &
+	gcs --project gcs-grpc-team-testing --universe=${UNIVERSE} \
+	--bucket $BUCKET --objects $OBJECT \
+	--scenario nonresumable-write-object --object-size 10 \
+	--api grpc-directpath &
 
 # Disabling CFE metrics for now.
 # ./target/release/perf-gauge --prometheus $PROMETHEUS \
 # 	--prometheus_label=location=${LOCATION},api=gRPC_CFE,universe=${UNIVERSE} --name $TEST_NAME \
 # 	--concurrency 1 --duration 1m --max_iter 1000000 --continuous \
-# 	gcs --api grpc-no-directpath --universe=${UNIVERSE} \
-# 	--scenario query-write-status \
-# 	--project $PROJECT --bucket $BUCKET --objects $OBJECT &
+# 	gcs --project gcs-grpc-team-testing --universe=${UNIVERSE} \
+# 	--bucket $BUCKET --objects $OBJECT \
+# 	--scenario write-object --object-size 100000 \
+# 	--api grpc-no-directpath &
 
 ./target/release/perf-gauge --prometheus $PROMETHEUS \
 	--prometheus_label=location=${LOCATION},api=JSON,universe=${UNIVERSE} --name $TEST_NAME \
 	--concurrency 1 --duration 1m --max_iter 1000000 --continuous \
-	gcs --api json --universe=${UNIVERSE} \
-	--scenario query-write-status \
-	--project $PROJECT --bucket $BUCKET --objects $OBJECT &
+	gcs --project gcs-grpc-team-testing --universe=${UNIVERSE} \
+	--bucket $BUCKET --objects $OBJECT \
+	--scenario nonresumable-write-object --object-size 10 \
+	--api json &

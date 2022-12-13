@@ -24,6 +24,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io;
 use std::str::FromStr;
+use std::collections::HashMap;
 
 #[derive(Clone)]
 pub enum BenchmarkMode {
@@ -88,8 +89,24 @@ struct Cli {
     /// Prometheus Job (by default `pushgateway`)
     #[clap(long = "prometheus_job")]
     prometheus_job: Option<String>,
+    #[clap(long = "prometheus_label", parse(try_from_str=parse_kv_tuples))]
+    prometheus_label: HashMap<String,String>,
     #[clap(subcommand)]
     command: Commands,
+}
+
+fn parse_kv_tuples(user_val: &str) -> Result<HashMap<std::string::String,std::string::String>, std::string::String> {
+    let mut mymap: HashMap<std::string::String, std::string::String> = HashMap::new();
+    for arg in user_val.split(",") {
+        let mut kv_split = arg.split('=');
+        let key = kv_split.next().expect("Expected a key before an equal sign");
+        let value = kv_split.next().expect("Expected a value after the equal sign");
+        if !kv_split.next().is_none() {
+            return Err(String::from("prometheus labels should be of the form key1=value1,key2=value2, etc."));
+        }
+        mymap.insert(String::from(key), String::from(value));
+    }
+    Ok(mymap)
 }
 
 #[derive(Subcommand, Debug)]
@@ -143,6 +160,14 @@ enum GcsApiOption {
 enum GcsScenario {
     ReadObject,
     QueryWriteStatus,
+    ResumableWriteObject,
+    NonresumableWriteObject,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ArgEnum, Debug)]
+enum GcsUniverse {
+    Prod,
+    Preprod,
 }
 
 
@@ -161,11 +186,25 @@ struct GcsOptions {
     #[clap(long)]
     objects: Vec<String>,
 
+    #[clap(default_value_t=0, long)]
+    object_size: u64,
+
     #[clap(long, arg_enum)]
     api: GcsApiOption,
 
     #[clap(long, arg_enum)]
     scenario: GcsScenario,
+
+    // Starts the read from a random point between 0 and this.
+    #[clap(long)]
+    random_range_read_max_start: Option<u64>,
+
+    // Reads a random number of bytes between 0 and this.
+    #[clap(long)]
+    random_range_read_max_len: Option<u64>,
+
+    #[clap(default_value="prod", long, arg_enum)]
+    universe: GcsUniverse,
 }
 
 
@@ -272,6 +311,7 @@ impl BenchmarkConfig {
             if SocketAddr::from_str(prometheus_addr.as_str()).is_err() {
                 panic!("Illegal Prometheus Gateway addr `{}`", prometheus_addr);
             }
+
             metrics_destinations.push(Arc::new(PrometheusReporter::new(
                 test_case_name,
                 prometheus_addr.to_string(),
@@ -282,6 +322,7 @@ impl BenchmarkConfig {
                         .clone()
                         .as_str(),
                 ),
+                args.prometheus_label.clone(),
             )));
         }
 
@@ -295,6 +336,7 @@ impl BenchmarkConfig {
                     .bucket(config.bucket.clone())
                     .gcp_project(config.project.clone())
                     .objects(config.objects.clone())
+                    .object_size(config.object_size.clone())
                     .api(String::from(match config.api {
                         GcsApiOption::GrpcNoDirectpath => "grpc-no-directpath",
                         GcsApiOption::GrpcDirectpath => "grpc-directpath",
@@ -302,8 +344,16 @@ impl BenchmarkConfig {
                     }))
                     .scenario(match config.scenario {
                         GcsScenario::ReadObject => GcsBenchScenario::ReadObject,
-                        GcsScenario::QueryWriteStatus => GcsBenchScenario::QueryWriteStatus
+                        GcsScenario::QueryWriteStatus => GcsBenchScenario::QueryWriteStatus,
+                        GcsScenario::ResumableWriteObject => GcsBenchScenario::ResumableWriteObject,
+                        GcsScenario::NonresumableWriteObject => GcsBenchScenario::NonresumableWriteObject,
                     })
+                    .universe(String::from(match config.universe {
+                        GcsUniverse::Prod => "prod",
+                        GcsUniverse::Preprod => "preprod",
+                    }))
+                    .random_range_read_max_start(config.random_range_read_max_start)
+                    .random_range_read_max_len(config.random_range_read_max_len)
                     .build()
                     .expect("GCSBenchmarkBuilder failed");
                 BenchmarkMode::Gcs(gcs_config)

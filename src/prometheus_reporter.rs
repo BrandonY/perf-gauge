@@ -11,13 +11,17 @@ pub struct PrometheusReporter {
     job: String,
     address: String,
     basic_auth: Option<prometheus::BasicAuthentication>,
+    labels: HashMap<String, String>,
 }
 
 impl ExternalMetricsServiceReporter for PrometheusReporter {
     fn report(&self, metrics: &BenchRunMetrics) -> io::Result<()> {
-        self.report_item(None, &metrics.combined)?;
+        self.report_item(None, None, &metrics.combined)?;
         for (operation, metrics_item) in metrics.by_operation.iter() {
-            self.report_item(Some(operation.to_owned()), metrics_item)?;
+            self.report_item(Some(operation.to_owned()), None, metrics_item)?;
+        }
+        for (cell, metrics_item) in metrics.by_cell.iter() {
+            self.report_item(None, Some(cell.to_owned()), metrics_item)?;
         }
         Ok(())
     }
@@ -31,18 +35,20 @@ impl ExternalMetricsServiceReporter for PrometheusReporter {
 
 /// For reporting to Prometheus
 impl PrometheusReporter {
-    pub fn new(test_case_name: Option<String>, addr: String, job: Option<&str>) -> Self {
+    pub fn new(test_case_name: Option<String>, addr: String, job: Option<&str>, custom_labels: HashMap<String, String>) -> Self {
         Self {
             test_case_name,
             job: job.unwrap_or("pushgateway").to_string(),
             address: addr,
             basic_auth: None,
+            labels: custom_labels,
         }
     }
 
     fn report_item(
         &self,
         operation_name: Option<String>,
+        cell_name: Option<String>,
         metrics: &BenchRunMetricsItem,
     ) -> io::Result<()> {
         info!("Sending metrics to Prometheus: {}", self.address,);
@@ -51,7 +57,12 @@ impl PrometheusReporter {
 
         let metric_families = registry.gather();
 
+        for (key, value) in &self.labels {
+            println!("self.label: {}: {}", key, value);
+        }
+
         let mut labels_map = HashMap::new();
+        labels_map.clone_from(&self.labels);
         labels_map.insert(
             "testname".to_string(),
             self.test_case_name
@@ -59,7 +70,10 @@ impl PrometheusReporter {
                 .cloned()
                 .unwrap_or_else(|| "perf-gauge".to_string()),
         );
-
+        if let Some(cell_name) = cell_name {
+            labels_map.insert("cell".to_string(), cell_name);
+        }
+        
         prometheus::push_metrics(
             &self.job,
             labels_map,
@@ -586,6 +600,7 @@ mod test {
             Some("test-prometheus".to_string()),
             url["http://".len()..].to_string(),
             Some("prometheus_job"),
+            HashMap::new(),
         );
 
         let mut metrics = BenchRunMetrics::new();
@@ -597,6 +612,7 @@ mod test {
                 duration: Duration::from_micros(i),
                 operation_name: None,
                 fatal_error: false,
+                cell: None,
             });
         }
 

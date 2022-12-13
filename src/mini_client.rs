@@ -15,13 +15,16 @@ pub struct CallResult {
     pub success: bool,
     pub bytes_received: ::std::os::raw::c_ulong,
     pub error_code: [::std::os::raw::c_char; 25usize],
-    pub upload_id: [::std::os::raw::c_char; 256usize],
+    pub upload_id: [::std::os::raw::c_char; 1024usize],
+    pub host_ip: [::std::os::raw::c_char; 255usize],
+    pub bitpusher_cell: [::std::os::raw::c_char; 32usize],
+    pub bitpusher_task_no: ::std::os::raw::c_int,
 }
 #[test]
 fn bindgen_test_layout_CallResult() {
     assert_eq!(
         ::std::mem::size_of::<CallResult>(),
-        304usize,
+        1360usize,
         concat!("Size of: ", stringify!(CallResult))
     );
     assert_eq!(
@@ -97,11 +100,63 @@ fn bindgen_test_layout_CallResult() {
         );
     }
     test_field_upload_id();
+    fn test_field_host_ip() {
+        assert_eq!(
+            unsafe {
+                let uninit = ::std::mem::MaybeUninit::<CallResult>::uninit();
+                let ptr = uninit.as_ptr();
+                ::std::ptr::addr_of!((*ptr).host_ip) as usize - ptr as usize
+            },
+            1065usize,
+            concat!(
+                "Offset of field: ",
+                stringify!(CallResult),
+                "::",
+                stringify!(host_ip)
+            )
+        );
+    }
+    test_field_host_ip();
+    fn test_field_bitpusher_cell() {
+        assert_eq!(
+            unsafe {
+                let uninit = ::std::mem::MaybeUninit::<CallResult>::uninit();
+                let ptr = uninit.as_ptr();
+                ::std::ptr::addr_of!((*ptr).bitpusher_cell) as usize - ptr as usize
+            },
+            1320usize,
+            concat!(
+                "Offset of field: ",
+                stringify!(CallResult),
+                "::",
+                stringify!(bitpusher_cell)
+            )
+        );
+    }
+    test_field_bitpusher_cell();
+    fn test_field_bitpusher_task_no() {
+        assert_eq!(
+            unsafe {
+                let uninit = ::std::mem::MaybeUninit::<CallResult>::uninit();
+                let ptr = uninit.as_ptr();
+                ::std::ptr::addr_of!((*ptr).bitpusher_task_no) as usize - ptr as usize
+            },
+            1352usize,
+            concat!(
+                "Offset of field: ",
+                stringify!(CallResult),
+                "::",
+                stringify!(bitpusher_task_no)
+            )
+        );
+    }
+    test_field_bitpusher_task_no();
 }
 extern "C" {
     pub fn CreateGCSClient(
         client_api: ClientAPI,
         project: *const ::std::os::raw::c_char,
+        universe: *const ::std::os::raw::c_char,
     ) -> *mut GoogleStorageClient;
 }
 extern "C" {
@@ -131,5 +186,30 @@ extern "C" {
     pub fn DeleteWrite(
         client: *mut GoogleStorageClient,
         upload_id: *const ::std::os::raw::c_char,
+    ) -> CallResult;
+}
+extern "C" {
+    pub fn ResumableWriteObject(
+        client: *mut GoogleStorageClient,
+        bucket: *const ::std::os::raw::c_char,
+        obj: *const ::std::os::raw::c_char,
+        object_len: ::std::os::raw::c_ulong,
+    ) -> CallResult;
+}
+extern "C" {
+    pub fn NonResumableWriteObject(
+        client: *mut GoogleStorageClient,
+        bucket: *const ::std::os::raw::c_char,
+        obj: *const ::std::os::raw::c_char,
+        object_len: ::std::os::raw::c_ulong,
+    ) -> CallResult;
+}
+extern "C" {
+    pub fn RangeRead(
+        client: *mut GoogleStorageClient,
+        bucket: *const ::std::os::raw::c_char,
+        obj: *const ::std::os::raw::c_char,
+        read_offset: ::std::os::raw::c_ulong,
+        read_length: ::std::os::raw::c_ulong,
     ) -> CallResult;
 }

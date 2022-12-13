@@ -14,9 +14,10 @@ pub enum GCSClientAPI {
 }
 
 impl GCSClient {
-  pub fn new(api: GCSClientAPI, project_id: String) -> Result<Self, String> {
+  pub fn new(api: GCSClientAPI, project_id: String, universe_id: String) -> Result<Self, String> {
     let project = std::ffi::CString::new(project_id).unwrap();
-    let raw_client = unsafe { crate::mini_client::CreateGCSClient(api as u32, project.as_ptr()) };
+    let universe = std::ffi::CString::new(universe_id).unwrap();
+    let raw_client = unsafe { crate::mini_client::CreateGCSClient(api as u32, project.as_ptr(), universe.as_ptr()) };
     Ok(GCSClient { raw_client })
   }
 
@@ -25,6 +26,13 @@ impl GCSClient {
     let object = std::ffi::CString::new(object_id).unwrap();
     unsafe { crate::mini_client::ReadObject(self.raw_client, bucket.as_ptr(), object.as_ptr()) }
   }
+
+  pub fn range_read(&self, bucket_id: String, object_id: String, read_offset: u64, read_length: u64) -> CallResult {
+    let bucket = std::ffi::CString::new(bucket_id).unwrap();
+    let object = std::ffi::CString::new(object_id).unwrap();
+    unsafe { crate::mini_client::RangeRead(self.raw_client, bucket.as_ptr(), object.as_ptr(), read_offset, read_length) }
+  }
+
 
   pub fn start_resumable_write(&self, bucket_id: String, object_id: String) -> CallResult {
     let bucket = std::ffi::CString::new(bucket_id).unwrap();
@@ -35,6 +43,18 @@ impl GCSClient {
   pub fn query_write_status(&self, upload_id: String) -> CallResult {
     let upload_id = std::ffi::CString::new(upload_id).unwrap();
     unsafe { crate::mini_client::QueryWriteStatus(self.raw_client, upload_id.as_ptr()) }
+  }
+
+  pub fn write_object_resumable(&self, bucket_id: String, object_id: String, num_bytes: u64) -> CallResult {
+    let bucket = std::ffi::CString::new(bucket_id).unwrap();
+    let object = std::ffi::CString::new(object_id).unwrap();
+    unsafe { crate::mini_client::ResumableWriteObject(self.raw_client, bucket.as_ptr(), object.as_ptr(), num_bytes) }
+  }
+
+  pub fn write_object_nonresumable(&self, bucket_id: String, object_id: String, num_bytes: u64) -> CallResult {
+    let bucket = std::ffi::CString::new(bucket_id).unwrap();
+    let object = std::ffi::CString::new(object_id).unwrap();
+    unsafe { crate::mini_client::NonResumableWriteObject(self.raw_client, bucket.as_ptr(), object.as_ptr(), num_bytes) }
   }
 }
 
@@ -53,6 +73,19 @@ impl CallResult {
       Err(utf8_failure) => panic!("Failure decoding string {}", utf8_failure),
     };
     String::from(s)
+  }
+
+  pub fn bitpusher_cell(&self) -> Option<String> {
+    let s = match unsafe{std::ffi::CStr::from_ptr(self.bitpusher_cell.as_ptr())}.to_str() {
+      Ok(valid_str) => valid_str,
+      Err(utf8_failure) => panic!("Failure decoding string {}", utf8_failure),
+    };
+    let cell_str = String::from(s);
+    if cell_str.len() > 0 {
+      Some(cell_str)
+    } else {
+      None
+    }
   }
 }
 

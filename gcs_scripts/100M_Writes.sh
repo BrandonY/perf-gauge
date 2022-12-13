@@ -1,5 +1,8 @@
-OBJECT=100M
-TEST_NAME=100m-object-read
+#!/bin/bash
+
+
+OBJECT="writes/tmp/obj"
+TEST_NAME=100m-object-write
 
 export LD_LIBRARY_PATH=./libs:$LD_LIBRARY_PATH
 export GRPC_XDS_EXPERIMENTAL_ENABLE_AGGREGATE_AND_LOGICAL_DNS_CLUSTER=true
@@ -20,28 +23,29 @@ BUCKET="${BUCKET_PREFIX}-${LOCATION}-${TEST_NAME}"
 
 while :
 do
+
 	./target/release/perf-gauge --prometheus $PROMETHEUS \
 		--prometheus_label=location=${LOCATION},api=gRPC,universe=${UNIVERSE} --name $TEST_NAME \
-		--concurrency 4 --duration 1m --max_iter 10 --continuous \
+		--concurrency 4 --duration 1m --max_iter 3 --continuous \
 		gcs --project gcs-grpc-team-testing --universe=${UNIVERSE} \
 		--bucket $BUCKET --objects $OBJECT \
-		--scenario read-object \
+		--scenario write-object --object-size 100000000 \
 		--api grpc-directpath
 
-    # Disabling CFE metrics for now.
+	# Disabling CFE metrics for now.
 	# ./target/release/perf-gauge --prometheus $PROMETHEUS \
 	# 	--prometheus_label=location=${LOCATION},api=gRPC_CFE,universe=${UNIVERSE} --name $TEST_NAME \
-	# 	--concurrency 4 --duration 1m --max_iter 10 --continuous \
+	# 	--concurrency 4 --duration 1m --max_iter 3 --continuous \
 	# 	gcs --project gcs-grpc-team-testing --universe=${UNIVERSE} \
 	# 	--bucket $BUCKET --objects $OBJECT \
-	# 	--scenario read-object \
-	# 	--api grpc-no-directpath
+	# 	--scenario write-object --object-size 100000000 \
+	# 	--api grpc-no-directpath &
 
 	./target/release/perf-gauge --prometheus $PROMETHEUS \
 		--prometheus_label=location=${LOCATION},api=JSON,universe=${UNIVERSE} --name $TEST_NAME \
-		--concurrency 4 --duration 1m --max_iter 10 --continuous \
+		--concurrency 4 --duration 1m --max_iter 3 --continuous \
 		gcs --project gcs-grpc-team-testing --universe=${UNIVERSE} \
 		--bucket $BUCKET --objects $OBJECT \
-		--scenario read-object \
-		--api json
+		--scenario write-object --object-size 100000000 \
+		--api json &
 done
